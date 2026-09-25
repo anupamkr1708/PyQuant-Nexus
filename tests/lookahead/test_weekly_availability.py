@@ -89,3 +89,42 @@ def test_appending_one_month_of_future_data_does_not_alter_older_signals():
         if pd.isna(v_full) and pd.isna(v_partial):
             continue
         assert v_full == v_partial, f"column {col} at {check_date} changed after appending future data: {v_full!r} vs {v_partial!r}"
+
+
+def test_holiday_shortened_week_uses_the_actual_last_present_session_as_weekend():
+    """Phase-2 Section 8: a week missing one weekday (simulating a holiday)
+    must use the LAST ACTUALLY-PRESENT session of that week as WeekEnd, not
+    assume Friday is always present."""
+    dates = pd.bdate_range("2024-01-01", periods=60)  # all business days
+    # Remove one Friday to simulate a holiday-shortened week.
+    fridays = [d for d in dates if d.weekday() == 4]
+    holiday_friday = fridays[3]
+    daily = make_synthetic_ohlcv(60, seed=45, start="2024-01-01")
+    daily = daily.drop(index=holiday_friday)
+
+    weekly = build_true_weekly_ohlc(daily)
+    week_containing_holiday = [w for w in weekly.index if abs((w - holiday_friday).days) <= 4]
+    assert week_containing_holiday, "expected a weekly row near the holiday week"
+    week_end = week_containing_holiday[0]
+    # WeekEnd must be the Thursday (last real session that week), not the
+    # (missing) Friday, and must not be some later week's Friday either.
+    assert week_end.weekday() == 3  # Thursday
+    assert week_end != holiday_friday
+
+
+def test_thursday_never_sees_an_incomplete_current_week_even_with_holiday_shortening():
+    dates = pd.bdate_range("2024-01-01", periods=60)
+    fridays = [d for d in dates if d.weekday() == 4]
+    holiday_friday = fridays[5]
+    daily = make_synthetic_ohlcv(60, seed=46, start="2024-01-01").drop(index=holiday_friday)
+    _, w = _build(daily)
+
+    # The Wednesday of that same holiday-shortened week must NOT see that
+    # week's own (still-forming) candle.
+    wednesday_candidates = [d for d in daily.index if d.weekday() == 2 and d < holiday_friday and (holiday_friday - d).days <= 2]
+    if not wednesday_candidates:
+        return
+    wednesday = wednesday_candidates[-1]
+    row = latest_known_weekly_row(w, wednesday)
+    thursday_of_that_week = holiday_friday - pd.Timedelta(days=1)
+    assert row.name < thursday_of_that_week

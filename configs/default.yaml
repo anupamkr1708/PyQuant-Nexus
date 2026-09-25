@@ -83,6 +83,11 @@ calendar:
   provider: pandas_market_calendars  # XNSE calendar; see DATA_SOURCES.md for verification notes
   session_open: "09:15"
   session_close: "15:30"
+  eod_data_cutoff: "16:00"    # category: ENGINEERING_DECISION -- distinct from session_close;
+                                # a buffer after the exchange close before a scan trusts an
+                                # external EOD data provider has published the final bar
+                                # (see docs/RESEARCH_LIMITATIONS.md: this is NOT a precise
+                                # model of NSE's closing-auction/post-close mechanics)
 
 universe:
   index_name: NIFTY200
@@ -100,11 +105,21 @@ costs:
   # category: PLACEHOLDER_UNVERIFIED — copied unchanged from the notebook. The brief (Section 45)
   # explicitly forbids treating these as verified current broker/tax figures. Confirm against your
   # actual broker + current STT/GST/SEBI rates before trusting net-of-cost numbers.
+  #
+  # Side-aware (Phase-2 Section 17): Indian delivery-equity STT has historically applied
+  # differently on buy vs sell legs depending on segment/product; this refactor does NOT assert
+  # current rates (unverified), but the cost engine now supports asymmetric buy/sell legs rather
+  # than forcing one flat round-trip percentage. A full BrokerProfile/ProductType hierarchy
+  # (delivery vs intraday, broker-specific slabs) is explicitly NOT_IMPLEMENTED — out of scope for
+  # this pass, to avoid overengineering a model with no verified inputs yet.
   brokerage_pct: 0.03
   stt_pct: 0.10
+  stt_buy_pct: 0.10           # override; defaults to stt_pct if left equal
+  stt_sell_pct: 0.10           # override; defaults to stt_pct if left equal
   exchange_charges_pct: 0.00345
   gst_pct: 0.18
   stamp_duty_pct: 0.0          # not modeled in the notebook; left at 0 rather than invented
+  stamp_duty_buy_only: true     # stamp duty is conventionally buy-side only in India; NOT independently verified
   sebi_charges_pct: 0.0         # not modeled in the notebook; left at 0 rather than invented
   slippage_pct: 0.05
 
@@ -114,5 +129,17 @@ research:
     train_years: 3.0
     test_years: 1.0
     step_years: 1.0
+  backtest:
+    # category: ENGINEERING_DECISION -- Phase-2 Section 14: previously hidden
+    # function defaults, now centralized here so nothing is a magic number
+    # inside research/backtest.py.
+    initial_capital: 1000000.0
+    max_concurrent_positions: 20
+    max_position_pct_of_equity: 100.0
+    fixed_horizon_days: 20
+    minimum_trade_qty: 1
+    exit_rule: STOP_ONLY_RESEARCH
+    entry_model_col: Any_Entry_Triggered
+    cost_scenario: base_cost
 
 random_seed: 42

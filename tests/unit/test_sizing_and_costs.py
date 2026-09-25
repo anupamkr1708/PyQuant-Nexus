@@ -15,7 +15,39 @@ def test_position_size_basic_formula():
 def test_position_size_zero_when_stop_equals_entry():
     result = position_size(capital=1_000_000, entry_price=100, stop_price=100)
     assert result["qty"] == 0
-    assert result["reason"] == "invalid_stop_distance"
+    # A stop exactly AT entry has zero distance AND fails the strict LONG
+    # geometry rule (stop must be < entry) -- Phase-2 Section 13 classifies
+    # this as invalid_risk_geometry, checked before the distance math runs.
+    assert result["reason"] == "invalid_risk_geometry"
+
+
+def test_position_size_rejects_long_stop_above_entry():
+    """Phase-2 Section 13 BLOCKER: a long stop placed ABOVE entry must never
+    be silently accepted via abs(entry - stop) -- it's a structurally invalid
+    setup, not just 'a very close stop'."""
+    result = position_size(capital=1_000_000, entry_price=100, stop_price=105, direction="LONG")
+    assert result["qty"] == 0
+    assert result["reason"] == "invalid_risk_geometry"
+
+
+def test_position_size_rejects_short_stop_below_entry():
+    result = position_size(capital=1_000_000, entry_price=100, stop_price=95, direction="SHORT")
+    assert result["qty"] == 0
+    assert result["reason"] == "invalid_risk_geometry"
+
+
+def test_position_size_accepts_valid_short_geometry():
+    result = position_size(capital=1_000_000, entry_price=100, stop_price=105, direction="SHORT", risk_per_trade_pct=0.5)
+    assert result["qty"] > 0
+    assert result["reason"] == "ok"
+
+
+def test_validate_risk_geometry_standalone():
+    from ema_scanner.execution.sizing import validate_risk_geometry
+    assert validate_risk_geometry(100, 95, "LONG") is True
+    assert validate_risk_geometry(100, 105, "LONG") is False
+    assert validate_risk_geometry(100, 105, "SHORT") is True
+    assert validate_risk_geometry(100, 95, "SHORT") is False
 
 
 def test_position_size_respects_lot_size():

@@ -132,9 +132,16 @@ def true_walk_forward(
         oos_stats = performance_stats(ev_test[f"Fwd_Ret_{horizon}D"])
         oos_stats.update({
             "fold": fold_i, "test_start": sp["test_start"], "test_end": sp["test_end"],
-            "selected_fast": best_combo[0], "selected_medium": best_combo[1],
-            "selected_structural": best_combo[2], "selected_long": best_combo[3],
-            "train_selection_metric": best_metric, "mode": "MODE_2_TRUE_WALK_FORWARD",
+            # Phase-2 Section 30: NEVER "optimal" -- these are the training-window
+            # selection, reported separately and untouched by the test-window
+            # (OOS) evaluation above. `selection_basis` documents exactly what
+            # the selection criterion was, so this can't be mistaken for a
+            # rigorously validated optimum.
+            "selected_training_fast": best_combo[0], "selected_training_medium": best_combo[1],
+            "selected_training_structural": best_combo[2], "selected_training_long": best_combo[3],
+            "training_window_selection_metric": best_metric,
+            "selection_basis": f"max median Fwd_Ret_{horizon}D across training-window events",
+            "mode": "MODE_2_TRUE_WALK_FORWARD",
         })
         rows.append(oos_stats)
     return pd.DataFrame(rows)

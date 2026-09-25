@@ -54,6 +54,7 @@ class ExecutionRecord:
     execution_price: float | None
     is_actual_fill: bool = False  # True only if a real broker execution is supplied
     label: str = "NEXT_SESSION_EXECUTION_REFERENCE"
+    status: Literal["OK", "DATA_GAP"] = "OK"
 
 
 @dataclass
@@ -101,34 +102,61 @@ class Trade:
     mae_pct: float | None = None
     mfe_pct: float | None = None
     holding_period_sessions: int | None = None
+    stop_source_swing_date: Any | None = None    # Phase-2 Section 20: swing audit trail
+    stop_available_date: Any | None = None         # the swing's CONFIRMATION date
+
+
+@dataclass(frozen=True)
+class SymbolFailure:
+    """Structured per-symbol failure record (Phase-2 Sections 6, 18) --
+    replaces silently `continue`-ing past a missing/failed symbol."""
+
+    symbol: str
+    stage: Literal["data_fetch", "quality_gate", "analysis_date_gate", "pipeline", "universe"]
+    reason: str
 
 
 @dataclass
 class RunManifest:
-    """Per-run provenance record (Section 61 of the brief)."""
+    """Per-run provenance record (brief Section 61; Phase-2 Section 22 --
+    field names now match the exact required schema, not approximations of
+    it: `rows_downloaded` is genuinely a row count, not a symbol count;
+    `missing_sessions` is computed, not hard-coded 0; `symbols_*` are
+    distinctly named from `universe_count`)."""
 
     run_id: str
     run_timestamp_utc: str
     analysis_date: str | None
+    decision_timestamp: str
     analysis_timezone: str
     calendar_source: str
     calendar_version: str
     universe_source: str
     universe_date: str | None
     universe_mode: str
-    data_provider: str
+    universe_count: int
+    provider: str
     provider_version: str | None
     python_version: str
     package_versions: dict[str, str]
     config_hash: str
     strategy_version: str
-    code_version: str | None
+    git_commit: str | None
+    git_dirty: bool | None
+    symbols_requested: int
+    symbols_processed: int
+    symbols_failed: int
     rows_downloaded: int
     rows_validated: int
-    tickers_requested: int
-    tickers_processed: int
-    tickers_failed: int
     missing_sessions: int
     stale_symbols: list[str]
-    data_quality_summary: dict[str, int]
+    data_quality_counts: dict[str, int]
     runtime_seconds: float
+    # Deprecated aliases kept only so any external code reading old manifest
+    # field names doesn't hard-crash; DO NOT populate these going forward.
+    code_version: str | None = None
+    tickers_requested: int | None = None
+    tickers_processed: int | None = None
+    tickers_failed: int | None = None
+    data_provider: str | None = None          # old name for `provider`
+    data_quality_summary: dict[str, int] | None = None  # old name for `data_quality_counts`

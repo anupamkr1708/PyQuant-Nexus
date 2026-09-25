@@ -11,7 +11,7 @@ from typing import Literal
 import pandas as pd
 
 from ema_scanner.calendar.nse import NSECalendar
-from ema_scanner.execution.costs import CostsConfig, compute_transaction_cost_pct
+from ema_scanner.execution.costs import CostsConfig, compute_round_trip_cost_pct
 from ema_scanner.execution.execution_models import resolve_execution_price
 from ema_scanner.strategy.entries import ENTRY_MODEL_COLS
 
@@ -50,7 +50,7 @@ def event_study_forward_returns(
 
 def apply_transaction_costs(event_study_df: pd.DataFrame, costs: CostsConfig, horizons: tuple[int, ...] = FORWARD_HORIZONS, scenario: str = "base_cost") -> pd.DataFrame:
     out = event_study_df.copy()
-    round_trip_cost_pct = compute_transaction_cost_pct(costs, scenario=scenario) * 100.0 * 2.0
+    round_trip_cost_pct = compute_round_trip_cost_pct(costs, scenario=scenario) * 100.0
     for h in horizons:
         col = f"Fwd_Ret_{h}D"
         if col in out.columns:
@@ -110,7 +110,12 @@ def comparison_table(event_df: pd.DataFrame, horizon: int = 20) -> pd.DataFrame:
             f"{horizon}D_Win_Rate_Pct": stats.get("win_rate_pct"), f"{horizon}D_Median_Return_Pct": stats.get("median_return_pct"),
             f"{horizon}D_Avg_Return_Pct_Gross": stats.get("avg_return_pct"), f"{horizon}D_Avg_Return_Pct_Net": stats_net.get("avg_return_pct"),
             "Max_Favorable_Excursion_Pct": sub["MFE_Pct"].mean(), "Max_Adverse_Excursion_Pct": sub["MAE_Pct"].mean(),
-            "Max_Drawdown_Pct": stats.get("max_drawdown_pct"),
+            # NOTE: no "Max_Drawdown_Pct" here by design (Phase-2 Section 15) --
+            # event-study observations are not a chronological, mutually-
+            # exclusive path, so a drawdown computed from them would not
+            # represent an actual tradable portfolio path. See
+            # research/statistics.py::portfolio_stats_from_equity_curve for the
+            # real (backtest-derived) drawdown metric.
         })
     return pd.DataFrame(rows)
 

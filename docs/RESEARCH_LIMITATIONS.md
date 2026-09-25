@@ -1,5 +1,16 @@
 # Research Limitations
 
+**Phase-2 status (see docs/PHASE2_AUDIT.md for the full itemized response to
+the adversarial review):** the correctness/architecture blockers identified
+in the Phase-2 review have been fixed and tested (price semantics, cache-first
+data flow, provider factory wiring, manual-date safety, analysis-date data
+gate, warm-up engine, cross-sectional RS percentile, backtest execution
+timeline, positional-fallback removal, stop/entry geometry, event-vs-portfolio
+statistics separation, scanner output semantics, manifest correctness). What
+follows is still accurate: no real market data has been used to validate any
+of this, for the same environment reason as before (no network access to
+yfinance/NSE in this build environment).
+
 Per brief Section 109 ("do not hide limitations") and Section 102 ("do not
 declare a strategy profitable"). Read this before trusting any output of this
 system for real capital decisions.

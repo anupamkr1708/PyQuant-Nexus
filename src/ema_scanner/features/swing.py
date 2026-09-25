@@ -72,6 +72,35 @@ def vectorized_last_confirmed_swing_low(swing_df: pd.DataFrame, low_col: str = "
     return confirmed_value.ffill()
 
 
+def vectorized_last_confirmed_swing_low_audit(swing_df: pd.DataFrame) -> pd.DataFrame:
+    """Phase-2 Section 20: companion audit trail to the price series above --
+    for every date, which SWING (its own pivot date) and CONFIRMATION date
+    produced the currently-forward-filled stop price. Returned as two
+    forward-filled columns so a trade record can cite exactly which swing its
+    stop came from (stop_source_swing_date, stop_available_date)."""
+    swing_date_col = pd.Series(pd.NaT, index=swing_df.index, dtype="object")
+    confirm_date_col = pd.Series(pd.NaT, index=swing_df.index, dtype="object")
+    for swing_date, row in swing_df[swing_df["Is_Swing_Low"]].iterrows():
+        confirm_at = row["Swing_Low_Confirmed_At"]
+        swing_date_col.loc[confirm_at] = swing_date
+        confirm_date_col.loc[confirm_at] = confirm_at
+    # ffill on an all-object (pd.NaT-seeded) column triggers a pandas
+    # FutureWarning about a downcast that does not actually change behavior
+    # here (there is nothing numeric to downcast to -- values are Timestamps).
+    # Silenced locally and explicitly, rather than globally, so it doesn't mask
+    # unrelated warnings elsewhere.
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)
+        swing_date_col = swing_date_col.ffill()
+        confirm_date_col = confirm_date_col.ffill()
+    return pd.DataFrame({
+        "Swing_Low_Source_Date": swing_date_col,
+        "Swing_Low_Available_Date": confirm_date_col,
+    })
+
+
+
 def vectorized_last_confirmed_swing_high(swing_df: pd.DataFrame, high_col: str = "High") -> pd.Series:
     confirmed_value = pd.Series(np.nan, index=swing_df.index)
     for swing_date, row in swing_df[swing_df["Is_Swing_High"]].iterrows():

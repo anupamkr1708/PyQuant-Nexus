@@ -108,6 +108,7 @@ class CalendarConfig(BaseModel):
     provider: str = "pandas_market_calendars"
     session_open: str = "09:15"
     session_close: str = "15:30"
+    eod_data_cutoff: str = "16:00"
 
 
 class UniverseConfig(BaseModel):
@@ -128,9 +129,12 @@ class RiskConfig(BaseModel):
 class CostsConfig(BaseModel):
     brokerage_pct: float = 0.03
     stt_pct: float = 0.10
+    stt_buy_pct: float | None = None
+    stt_sell_pct: float | None = None
     exchange_charges_pct: float = 0.00345
     gst_pct: float = 0.18
     stamp_duty_pct: float = 0.0
+    stamp_duty_buy_only: bool = True
     sebi_charges_pct: float = 0.0
     slippage_pct: float = 0.05
 
@@ -141,9 +145,24 @@ class WalkForwardConfig(BaseModel):
     step_years: float = 1.0
 
 
+class BacktestConfig(BaseModel):
+    """Phase-2 Section 14: backtest parameters that were previously function
+    defaults/magic numbers, now centralized in config."""
+
+    initial_capital: float = 1_000_000.0
+    max_concurrent_positions: int = 20
+    max_position_pct_of_equity: float = 100.0  # 100 == no additional per-position cap beyond risk sizing
+    fixed_horizon_days: int = 20
+    minimum_trade_qty: int = 1
+    exit_rule: Literal["STOP_ONLY_RESEARCH", "FIXED_HORIZON"] = "STOP_ONLY_RESEARCH"
+    entry_model_col: str = "Any_Entry_Triggered"
+    cost_scenario: Literal["zero_cost", "low_cost", "base_cost", "high_cost", "stress_cost"] = "base_cost"
+
+
 class ResearchConfig(BaseModel):
     horizons_days: list[int] = Field(default_factory=lambda: [1, 3, 5, 10, 20, 40])
     walk_forward: WalkForwardConfig = Field(default_factory=WalkForwardConfig)
+    backtest: BacktestConfig = Field(default_factory=BacktestConfig)
 
 
 class Config(BaseModel):

@@ -38,3 +38,43 @@ def test_stale_data_flagged_using_trading_sessions_not_calendar_days():
     far_future = last_date + pd.Timedelta(days=60)
     report = validate_ohlc(df, cal, as_of_date=far_future, max_stale_sessions=5)
     assert any("stale" in i for i in report.issues)
+
+
+def test_duplicate_dates_are_hard_fail_not_just_warn():
+    """Phase-2 Section 24/25: duplicate dates must never be signal-eligible."""
+    df = make_synthetic_ohlcv(50, seed=34)
+    dup = pd.concat([df, df.iloc[[5]]]).sort_index()
+    cal = NSECalendar()
+    report = validate_ohlc(dup, cal)
+    assert report.status == QUALITY_FAIL
+    assert report.eligible_for_signal is False
+
+
+def test_non_monotonic_index_is_hard_fail():
+    df = make_synthetic_ohlcv(50, seed=35)
+    shuffled = df.iloc[[0, 2, 1, 3, 4] + list(range(5, 50))]
+    cal = NSECalendar()
+    report = validate_ohlc(shuffled, cal)
+    assert report.status == QUALITY_FAIL
+    assert report.eligible_for_signal is False
+
+
+def test_missing_analysis_date_bar_is_not_eligible_for_signal():
+    """Phase-2 Section 6/25: a resolved analysis date with no actual bar must
+    never be silently treated as eligible (no falling back to the previous bar)."""
+    df = make_synthetic_ohlcv(50, seed=36)
+    cal = NSECalendar()
+    missing_date = df.index.max() + pd.Timedelta(days=1)
+    report = validate_ohlc(df, cal, as_of_date=missing_date, max_stale_sessions=100)
+    assert report.analysis_date_bar_present is False
+    assert report.eligible_for_signal is False
+    assert any("DATA_MISSING_ANALYSIS_SESSION" in i for i in report.issues)
+
+
+def test_present_analysis_date_bar_is_eligible_when_otherwise_clean():
+    df = make_synthetic_ohlcv(300, seed=37)
+    cal = NSECalendar()
+    analysis_date = df.index[-1]
+    report = validate_ohlc(df, cal, as_of_date=analysis_date, max_stale_sessions=100)
+    assert report.analysis_date_bar_present is True
+    assert report.eligible_for_signal is True

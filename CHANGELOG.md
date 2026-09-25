@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.2.0 -- Phase 2: adversarial correctness review response
+
+Full itemized response in `docs/PHASE2_AUDIT.md`. No architecture rewrite --
+targeted fixes inside the existing module boundaries. Headline BUG FIXES:
+
+- Price semantics: SPLIT_ADJUSTED no longer derived from AdjClose/Close
+  (dividend-contaminated); pure split-only back-adjustment implemented.
+- Cache-first data flow: CLI no longer re-downloads full history every run.
+- Provider factory: config's primary/secondary_provider now actually control
+  what gets instantiated (previously ignored by CLI commands).
+- Manual-date safety: today-before-cutoff rejected, future dates always
+  rejected, distinct exchange-close vs. EOD-data-cutoff concepts.
+- Analysis-date data gate: a missing bar for the resolved date is now a hard
+  DATA_MISSING_ANALYSIS_SESSION failure, never a silent fallback to the
+  previous bar.
+- Warm-up engine: research/backtest commands now fetch sufficient prior
+  history before the requested evaluation window.
+- Cross-sectional RS percentile: actually computed now (was always None).
+- Backtest execution timeline: signals create a PENDING_ORDER with no cash/
+  exposure impact until the actual execution date (previously leaked future
+  exposure into a past valuation).
+- Positional execution fallback removed: a missing calendar-resolved session
+  is now a DATA_GAP, never silently advanced to "the next row".
+- Stop/entry geometry validated explicitly (INVALID_RISK_GEOMETRY) rather than
+  hidden behind abs(entry-stop).
+- Event-study statistics vs. portfolio statistics are now fully separate;
+  event-level "max drawdown" (meaningless for non-chronological, overlapping
+  observations) was removed.
+- Scanner output split into universe_diagnostics / candidates / signals;
+  "signals_found" now means actual entry triggers, not processed-symbol count.
+- Manifest schema corrected to the exact required field set.
+
+See docs/PHASE2_AUDIT.md for the full section-by-section classification
+(PRESERVED / BUG FIX / ENGINEERING CHANGE / RESEARCH HYPOTHESIS / NOT
+IMPLEMENTED) of every item in the Phase-2 review.
+
 ## 0.1.0 — Initial refactor (2026-09-23)
 
 Refactor of `Nifty200_EMA_Cluster_Research.ipynb` into `ema_scanner`. See
