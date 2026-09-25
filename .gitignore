@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+data/cache/*
+!data/cache/.gitkeep
+outputs/signals/*
+outputs/research/*
+outputs/reports/*
+outputs/manifests/*
+outputs/logs/*
+!outputs/**/.gitkeep
+.venv/
+venv/

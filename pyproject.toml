@@ -1,0 +1,59 @@
+[project]
+name = "ema-scanner"
+version = "0.1.0"
+description = "NIFTY 200 EMA-cluster research and EOD signal scanner (refactor of Nifty200_EMA_Cluster_Research.ipynb)"
+requires-python = ">=3.10"
+readme = "README.md"
+dependencies = [
+    "pandas>=2.2,<3.0",
+    "numpy>=1.26,<3.0",
+    "pyarrow>=15.0",
+    "requests>=2.31",
+    "PyYAML>=6.0",
+    "pydantic>=2.6,<3.0",
+    "openpyxl>=3.1",
+    "pandas-market-calendars==5.4.0",
+    "yfinance==1.7.0",
+    "click>=8.1",
+    "tzdata>=2024.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "hypothesis>=6.100",
+]
+
+[project.scripts]
+ema-scanner = "ema_scanner.cli:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+# BLE001 (blind except) and S112 (try/except/continue) are intentionally
+# triggered in research/sensitivity.py and research/walk_forward.py's grid-
+# search loops, where one bad parameter combination or one bad ticker must
+# not crash a multi-hour research run. Each site carries its own inline
+# `# noqa` with a one-line rationale rather than a blanket suppression here,
+# so this ignore list stays empty by design — reviewers should be able to see
+# every exception at its call site.
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true

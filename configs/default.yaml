@@ -1,0 +1,118 @@
+# EMA Scanner — default configuration
+#
+# Every value here traces to a specific notebook cell; see docs/NOTEBOOK_AUDIT.md.
+# `category` on each block is one of:
+#   SOURCE_DERIVED_RULE | MATHEMATICAL_DEFINITION | RESEARCH_HYPOTHESIS
+#   | OPTIONAL_FILTER | PLACEHOLDER_UNVERIFIED | ENGINEERING_DECISION
+# None of the numeric defaults below are asserted "optimal" — see STRATEGY_SPEC.md.
+
+strategy:
+  version: "ema_cluster_v1"      # STRATEGY_VERSION — bump only when math changes (Section 88)
+  ema:
+    fast: 10          # category: SOURCE_DERIVED_RULE (user's own spec)
+    medium: 20         # category: SOURCE_DERIVED_RULE
+    structural: 89     # category: SOURCE_DERIVED_RULE
+    long: 200          # category: SOURCE_DERIVED_RULE
+    seed_method: sma   # sma | first_obs — category: MATHEMATICAL_DEFINITION (notebook Cell 6/14)
+
+  swing:
+    left_bars: 5        # category: ENGINEERING_DECISION (default unchanged from notebook)
+    right_bars: 5        # confirmation lag — the *existence* of the lag is SOURCE_DERIVED (no-lookahead)
+
+  volatility:
+    atr_period: 14        # category: SOURCE_DERIVED_RULE ("Preserve ATR14")
+
+  cluster:
+    width_lookback: 252              # category: RESEARCH_HYPOTHESIS
+    compression_percentile: 0.20      # category: RESEARCH_HYPOTHESIS
+    expansion_percentile: 0.80        # category: RESEARCH_HYPOTHESIS
+    flat_band_percentile: 0.10        # category: RESEARCH_HYPOTHESIS (notebook Cell 20 default)
+
+  definitions:
+    sequential_crossover_max_gap_sessions: 10   # category: RESEARCH_HYPOTHESIS (Definition A)
+    compression_expansion_lookahead_days: 10     # category: RESEARCH_HYPOTHESIS (Definition D)
+    enabled: [A, B, C, D]
+
+  pullback:
+    shallow_atr: 1.0        # category: RESEARCH_HYPOTHESIS
+    moderate_atr: 2.5        # category: RESEARCH_HYPOTHESIS
+    deep_atr: 4.0             # category: RESEARCH_HYPOTHESIS
+    breakout_memory_bars: 60   # category: ENGINEERING_DECISION — promoted from an unlabeled magic
+                                # number in the notebook (Cell 26); default value unchanged
+
+  entries:
+    enabled: [A, B, C, D, E]   # category: RESEARCH_HYPOTHESIS x5, independently selectable
+
+  regime:
+    benchmark: NIFTY50           # NIFTY50 | NIFTY200 | CUSTOM — category: ENGINEERING_DECISION
+                                   # (brief Section 33: keep configurable, don't change the notebook default silently)
+    index_ema_fast: 20
+    index_ema_medium: 50
+    index_ema_structural: 89
+    index_ema_long: 200
+
+  relative_strength:
+    windows: [20, 60, 120]      # category: SOURCE_DERIVED_RULE
+
+  liquidity:
+    enabled: false                       # category: OPTIONAL_FILTER — OFF by default (notebook Cell 6)
+    min_price: 0.0
+    min_average_daily_traded_value: 0.0
+    min_average_volume: 0.0
+    min_days_with_valid_volume: 0
+
+data:
+  min_history_years: 4          # category: ENGINEERING_DECISION
+  max_stale_sessions: 5          # category: ENGINEERING_DECISION — now enforced in TRADING SESSIONS,
+                                   # not calendar days, and no longer silently overridden (see audit §4)
+  refresh_overlap_sessions: 10    # category: ENGINEERING_DECISION (Section 18 of brief)
+  primary_provider: YFINANCE       # category: ENGINEERING_DECISION — the brief prefers NSE
+                                     # (Section 14), but the NSE bhavcopy endpoint could not be
+                                     # verified in this build environment (see DATA_SOURCES.md);
+                                     # defaulting to the VERIFIED, IMPLEMENTED provider rather
+                                     # than an unverified one. Switch to NSE once its endpoint is
+                                     # confirmed and wired up in data/nse.py.
+  secondary_provider: NSE
+  price_mode: SPLIT_ADJUSTED       # RAW | SPLIT_ADJUSTED | TOTAL_RETURN_ADJUSTED — category: ENGINEERING_DECISION
+                                     # (yfinance auto_adjust=False + explicit AdjClose column preserved,
+                                     # see DATA_MODEL.md for what each mode actually means here)
+
+calendar:
+  exchange: NSE
+  timezone: Asia/Kolkata
+  provider: pandas_market_calendars  # XNSE calendar; see DATA_SOURCES.md for verification notes
+  session_open: "09:15"
+  session_close: "15:30"
+
+universe:
+  index_name: NIFTY200
+  source_csv_url: "https://archives.nseindia.com/content/indices/ind_nifty200list.csv"  # unchanged from notebook Cell 8
+  min_expected_constituents: 150   # sanity-check threshold, unchanged from notebook
+
+execution:
+  model: next_open     # same_close | next_open | next_close — category: ENGINEERING_DECISION (notebook default)
+
+risk:
+  risk_per_trade_pct: 0.5     # category: OPTIONAL / user-set
+  atr_stop_multiple: 2.5       # category: OPTIONAL — kept separate from the swing-based stop
+
+costs:
+  # category: PLACEHOLDER_UNVERIFIED — copied unchanged from the notebook. The brief (Section 45)
+  # explicitly forbids treating these as verified current broker/tax figures. Confirm against your
+  # actual broker + current STT/GST/SEBI rates before trusting net-of-cost numbers.
+  brokerage_pct: 0.03
+  stt_pct: 0.10
+  exchange_charges_pct: 0.00345
+  gst_pct: 0.18
+  stamp_duty_pct: 0.0          # not modeled in the notebook; left at 0 rather than invented
+  sebi_charges_pct: 0.0         # not modeled in the notebook; left at 0 rather than invented
+  slippage_pct: 0.05
+
+research:
+  horizons_days: [1, 3, 5, 10, 20, 40]   # category: SOURCE_DERIVED (notebook FORWARD_HORIZONS)
+  walk_forward:
+    train_years: 3.0
+    test_years: 1.0
+    step_years: 1.0
+
+random_seed: 42
