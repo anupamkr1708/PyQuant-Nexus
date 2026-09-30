@@ -1,5 +1,25 @@
 # Research Limitations
 
+**Phase-3 status (see docs/PHASE3_AUDIT.md):** a second adversarial review
+found and this pass fixed 27 of 30 additional correctness issues, including
+one severe bug (same_close signals never executed at all) and one genuine
+point-in-time leakage path (corporate-action back-adjustment referencing an
+ever-growing dataset's last row instead of the decision date). The remaining
+3 items (a real-data smoke test, a real 2015-2026 historical study, and an
+exhaustive line-by-line magic-number/config-propagation audit) are NOT done,
+for the reasons given in each section below.
+
+**Phase-2 status (see docs/PHASE2_AUDIT.md):** the correctness/architecture
+blockers identified in that review were fixed and tested (price semantics,
+cache-first data flow, provider factory wiring, manual-date safety,
+analysis-date data gate, warm-up engine, cross-sectional RS percentile,
+backtest execution timeline, positional-fallback removal, stop/entry
+geometry, event-vs-portfolio statistics separation, scanner output
+semantics, manifest correctness).
+
+**What is still true after both passes: no real market data has been used to
+validate any of this**, for the same environment reason each time.
+
 **Phase-2 status (see docs/PHASE2_AUDIT.md for the full itemized response to
 the adversarial review):** the correctness/architecture blockers identified
 in the Phase-2 review have been fixed and tested (price semantics, cache-first

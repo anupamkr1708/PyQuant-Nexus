@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+from ema_scanner.calendar.nse import NSECalendar
 from ema_scanner.config import Config
 from ema_scanner.execution.stops import compute_stops
 from ema_scanner.features.alignment import classify_alignment, compute_mtf_matrix
@@ -43,6 +44,7 @@ def build_stock_feature_frame(
     index_close_aligned: pd.Series,
     regime_df: pd.DataFrame,
     cfg: Config,
+    calendar: NSECalendar | None = None,
 ) -> pd.DataFrame:
     s = cfg.strategy
     daily = daily_ohlc.sort_index().copy()
@@ -51,7 +53,8 @@ def build_stock_feature_frame(
     d = compute_all_emas(daily, suffix="", ema_cfg=s.ema)
 
     # --- Weekly context (calendar-aware grouping, corrected availability rule) ---
-    weekly = build_true_weekly_ohlc(daily)
+    expected_week_ends = calendar.expected_week_ends(daily.index.min(), daily.index.max()) if calendar is not None else None
+    weekly = build_true_weekly_ohlc(daily, expected_week_ends=expected_week_ends)
     w = compute_all_emas(weekly, suffix="_W", ema_cfg=s.ema)
     weekly_cols_present = [c for c in ["EMA10_W", "EMA20_W", "EMA89_W", "EMA200_W"] if c in w.columns]
     d = attach_last_known_weekly(d, w, weekly_cols_present)
@@ -66,9 +69,13 @@ def build_stock_feature_frame(
     d = compute_cluster_compression(
         d, suffix="", lookback=s.cluster.width_lookback,
         compression_pctl=s.cluster.compression_percentile, expansion_pctl=s.cluster.expansion_percentile,
+        min_periods=s.cluster.percentile_min_periods,
     )
-    d = compute_cluster_expansion(d, suffix="", lookback=s.cluster.width_lookback, flat_band_pctl=s.cluster.flat_band_percentile)
-    d = compute_ema_slopes(d, suffix="")
+    d = compute_cluster_expansion(
+        d, suffix="", lookback=s.cluster.width_lookback, flat_band_pctl=s.cluster.flat_band_percentile,
+        slope_lookback_days=s.cluster.width_slope_lookback_days, min_periods=s.cluster.percentile_min_periods,
+    )
+    d = compute_ema_slopes(d, suffix="", k=s.volatility.ema_slope_lookback_days)
     d = compute_enabled_definitions(d, d["Daily_State"], s.definitions, suffix="")
 
     # --- ATR / swings / pullback ---
@@ -101,7 +108,9 @@ def build_stock_feature_frame(
     d["Market_Regime"] = attach_market_regime_asof(d, regime_df)
     rs = compute_relative_strength(d["Close"], index_close_aligned.reindex(d.index, method="ffill"), windows=tuple(s.relative_strength.windows))
     d = pd.concat([d, rs], axis=1)
-    d = compute_liquidity_diagnostics(d)
+    d = compute_liquidity_diagnostics(
+        d, volume_window_fast=s.liquidity.volume_window_fast_days, volume_window_slow=s.liquidity.volume_window_slow_days,
+    )
 
     # --- Signal state machine (deterministic, see state_machine.py precedence docs) ---
     d["Signal_State"] = compute_signal_state(d["Daily_State"], d["Pullback_State"], d["Any_Entry_Triggered"], d["Cluster_Expansion_State"])

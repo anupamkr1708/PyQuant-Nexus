@@ -113,6 +113,13 @@ def resolve_analysis_date(
                 f"(weekend or exchange holiday). Refusing to silently roll to another "
                 f"date -- pass an actual trading date."
             )
+        if info.session_close is None and d.date() == today_naive.date():
+            raise AnalysisDateError(
+                f"{manual_date} is today's session and is a special session whose exact timing is not "
+                f"verified in the calendar reference data (see configs/nse_special_sessions.yaml). "
+                f"Completion cannot be determined without inferring a time, which this system refuses "
+                f"to do -- request this date again once the session's date has fully passed."
+            )
         if d.date() == today_naive.date() and now_ts < cutoff_ts:
             raise AnalysisDateError(
                 f"{manual_date} is today's session and it has not yet reached the "
@@ -122,6 +129,9 @@ def resolve_analysis_date(
                 f"refusing to treat today as complete. Try again after {eod_data_cutoff} IST, "
                 f"or request yesterday's session."
             )
+        # A session with unverified timing (e.g. Muhurat) is treated as complete
+        # only because its calendar DATE is strictly in the past (guaranteed by
+        # the two checks above) -- never via an inferred clock time.
         exchange_complete = now_ts >= info.session_close if info.session_close is not None else True
         cutoff_passed = now_ts >= cutoff_ts
         return AnalysisDateResolution(
@@ -145,7 +155,23 @@ def resolve_analysis_date(
     cursor = today
     for _ in range(30):
         info = calendar.session_info(cursor)
-        if info.is_trading_day and info.session_close is not None:
+        if info.is_trading_day and info.session_close is None:
+            # Known trading DATE, unknown TIMING (Phase-3 BLOCKER 8): complete
+            # only once the calendar date has fully passed -- no time is inferred.
+            cutoff_ts = _cutoff_timestamp(cursor, eod_data_cutoff)
+            if cursor.date() < today.date():
+                return AnalysisDateResolution(
+                    requested_date=None, resolved_signal_date=cursor.tz_localize(None),
+                    is_trading_day=True, exchange_session_complete=True, eod_data_cutoff_passed=True,
+                    is_session_complete=True, session_open=info.session_open, session_close=info.session_close,
+                    eod_data_cutoff_timestamp=cutoff_ts, calendar_source=calendar.calendar_source,
+                    calendar_version=calendar.calendar_version, mode="AUTOMATIC",
+                    reason=(
+                        "latest session is a special session with unverified timing; treated as complete "
+                        "only because its calendar date has fully passed (no time inferred)"
+                    ),
+                )
+        elif info.is_trading_day and info.session_close is not None:
             cutoff_ts = _cutoff_timestamp(cursor, eod_data_cutoff)
             exchange_complete = now_ts >= info.session_close
             cutoff_passed = now_ts >= cutoff_ts

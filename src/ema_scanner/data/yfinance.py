@@ -18,7 +18,18 @@ default is set explicitly here rather than inherited:
   provider default decide the price mode).
 - `actions=True`: also pulls dividends/splits, needed for
   data/corporate_actions.py.
-- `repair=True`, `threads=False` (predictable single-symbol calls),
+- `repair=False` (Phase-3 BLOCKER 24): yfinance's `repair=True` silently
+  applies vendor-side heuristic corrections to detected bad ticks (e.g.
+  100x/currency errors, some split/dividend mismatches) without separately
+  exposing WHAT was changed. Per the Phase-3 review's explicit preference
+  ("prefer repair=False unless repaired observations are separately
+  captured and auditable"), this provider defaults to `repair=False` --
+  any bad ticks in the raw feed surface as-is and are caught by
+  `data/quality.py`'s explicit checks (non-finite values, High<Low, etc.)
+  instead of being invisibly pre-cleaned by the vendor. This choice is
+  recorded in `ProviderMetadata` and should be surfaced in the run manifest
+  so it's never a hidden research-preprocessing step.
+- `threads=False` (predictable single-symbol calls),
   `interval="1d"`, `timeout` explicit.
 
 NOTE: this provider's `get_daily_ohlcv` has NOT been exercised against the live
@@ -56,7 +67,7 @@ class YFinanceProvider(DataProvider):
         try:
             raw = yf.download(
                 tickers=ticker, start=start_date, end=exclusive_end, interval="1d",
-                auto_adjust=False, actions=True, repair=True, threads=False,
+                auto_adjust=False, actions=True, repair=False, threads=False,
                 progress=False, timeout=30, multi_level_index=False,
             )
         except Exception as e:  # yfinance raises a variety of exception types
@@ -83,5 +94,6 @@ class YFinanceProvider(DataProvider):
             trade_date_coverage_start=str(df.index.min().date()),
             trade_date_coverage_end=str(df.index.max().date()),
             schema_version="yfinance_v1", parser_version=YFINANCE_PINNED_VERSION,
+            vendor_repair_enabled=False,
         )
         return df, meta

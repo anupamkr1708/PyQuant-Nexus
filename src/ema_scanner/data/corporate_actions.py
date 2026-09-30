@@ -103,3 +103,27 @@ def total_return_series(adj_close: pd.Series) -> pd.Series:
     SPLIT_ADJUSTED_OHLCV's Close and must never be substituted for it in
     EMA/ATR/swing/stop calculations (brief Phase-2 Section 1)."""
     return adj_close.rename("TotalReturnClose")
+
+
+def point_in_time_split_adjustment(raw_ohlcv: pd.DataFrame, stock_splits: pd.Series, as_of_date) -> pd.DataFrame:
+    """Phase-3 BLOCKER 1 fix: masks out any split event whose date is AFTER
+    `as_of_date` before computing the back-adjustment factor, so
+    `signal_features(D)` computed with `as_of_date=D` is invariant to any
+    corporate-action record that hadn't happened yet as of D.
+
+    Without this, a symbol's back-adjustment factor is a function of the
+    LATEST split present anywhere in the raw series -- so if the underlying
+    raw dataset later grows to include a split that occurs AFTER D (e.g. the
+    cache is refreshed for a more recent live scan, or a walk-forward fold
+    evaluates a later out-of-sample window from the same raw frame), the
+    factor applied to ALL rows up to and including D would retroactively
+    change, silently altering `signal_features(D)` after the fact -- a form
+    of look-ahead leakage through the corporate-action adjustment step
+    itself, distinct from (and not addressed by) the earlier AdjClose/Close
+    bug fix. See tests/lookahead/test_point_in_time_corporate_actions.py.
+    """
+    as_of = pd.Timestamp(as_of_date)
+    masked_splits = stock_splits.copy()
+    masked_splits[masked_splits.index > as_of] = 0.0
+    factors = compute_split_adjustment_factors(masked_splits)
+    return apply_split_adjustment(raw_ohlcv, factors)

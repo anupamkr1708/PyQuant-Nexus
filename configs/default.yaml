@@ -21,12 +21,15 @@ strategy:
 
   volatility:
     atr_period: 14        # category: SOURCE_DERIVED_RULE ("Preserve ATR14")
+    ema_slope_lookback_days: 10  # category: ENGINEERING_DECISION -- Phase-3 BLOCKER 25 (was a bare k=10 default)
 
   cluster:
     width_lookback: 252              # category: RESEARCH_HYPOTHESIS
     compression_percentile: 0.20      # category: RESEARCH_HYPOTHESIS
     expansion_percentile: 0.80        # category: RESEARCH_HYPOTHESIS
     flat_band_percentile: 0.10        # category: RESEARCH_HYPOTHESIS (notebook Cell 20 default)
+    width_slope_lookback_days: 5       # category: ENGINEERING_DECISION -- Phase-3 BLOCKER 25 (was a bare .rolling(5))
+    percentile_min_periods: 30          # category: ENGINEERING_DECISION -- Phase-3 BLOCKER 25 (was a bare min_periods=30)
 
   definitions:
     sequential_crossover_max_gap_sessions: 10   # category: RESEARCH_HYPOTHESIS (Definition A)
@@ -60,6 +63,8 @@ strategy:
     min_average_daily_traded_value: 0.0
     min_average_volume: 0.0
     min_days_with_valid_volume: 0
+    volume_window_fast_days: 20   # category: ENGINEERING_DECISION -- Phase-3 BLOCKER 25
+    volume_window_slow_days: 50
 
 data:
   min_history_years: 4          # category: ENGINEERING_DECISION
@@ -141,5 +146,8 @@ research:
     exit_rule: STOP_ONLY_RESEARCH
     entry_model_col: Any_Entry_Triggered
     cost_scenario: base_cost
+    risk_budget_basis: EQUITY   # category: ENGINEERING_DECISION -- matches STRATEGY_SPEC.md
+                                  # Section 8's documented "equity * risk_per_trade_pct" formula.
+                                  # CASH is available as an explicit, selectable research variant.
 
 random_seed: 42

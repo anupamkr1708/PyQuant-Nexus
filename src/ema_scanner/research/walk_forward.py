@@ -79,20 +79,48 @@ def true_walk_forward(
     train_years: float = 3.0, test_years: float = 1.0,
 ) -> pd.DataFrame:
     """MODE 2: true nested train-then-freeze-then-test walk-forward. See module
-    docstring — this is new, deliberately simple code."""
+    docstring -- this is new, deliberately simple code.
+
+    **Bug fixed (Phase-3 BLOCKER 6):** each fold used to slice the RAW
+    `universe` frames directly at `[train_start, train_end)` / `[test_start,
+    test_end)` BEFORE calling `build_stock_feature_frame` -- meaning EMA200
+    (and especially the weekly EMA200, which needs ~600 weeks to converge --
+    see research/warmup.py) was computed from scratch starting at the fold's
+    own boundary, with zero prior history. Every fold now fetches
+    `calculate_required_warmup(cfg)` sessions of extra history BEFORE its own
+    train/test window, builds features continuously across
+    [warmup_start, fold_end), and only THEN trims to the fold's actual
+    train/test window for selection/evaluation -- exactly the "fold
+    evaluation start -> calculate fold warmup -> load warmup+train/test data
+    -> compute features continuously -> select using train rows only ->
+    freeze -> evaluate test rows only" structure required.
+    """
+    from ema_scanner.research.warmup import calculate_required_warmup
+
+    warmup_policy = calculate_required_warmup(base_cfg)
     all_dates = pd.DatetimeIndex(sorted(set().union(*[set(d.index) for d in universe.values()])))
     splits = walk_forward_splits(all_dates, train_years=train_years, test_years=test_years, step_years=test_years)
     keys = list(param_grid.keys())
     combos = list(itertools.product(*[param_grid[k] for k in keys]))
     rows = []
 
-    for fold_i, sp in enumerate(splits):
-        train_universe = {t: d[(d.index >= sp["train_start"]) & (d.index < sp["train_end"])] for t, d in universe.items()}
-        train_universe = {t: d for t, d in train_universe.items() if len(d) > 260}
-        if not train_universe:
-            continue
-        train_index = index_df[(index_df.index >= sp["train_start"]) & (index_df.index < sp["train_end"])]
+    def _build_with_warmup(raw_universe: dict[str, pd.DataFrame], raw_index: pd.DataFrame, window_start, window_end, cfg: Config) -> tuple[dict, pd.DataFrame]:
+        warmup_start = warmup_policy.warmup_start_via_calendar(window_start, calendar)
+        index_with_warmup = raw_index[(raw_index.index >= warmup_start) & (raw_index.index < window_end)]
+        regime_df = compute_market_regime(
+            index_with_warmup, ema_fast=cfg.strategy.regime.index_ema_fast, ema_medium=cfg.strategy.regime.index_ema_medium,
+            ema_structural=cfg.strategy.regime.index_ema_structural, ema_long=cfg.strategy.regime.index_ema_long,
+        )
+        frames = {}
+        for t, d in raw_universe.items():
+            d_with_warmup = d[(d.index >= warmup_start) & (d.index < window_end)]
+            if len(d_with_warmup) < 30:
+                continue
+            full_feats = build_stock_feature_frame(d_with_warmup, index_with_warmup["Close"], regime_df, cfg, calendar=calendar)
+            frames[t] = full_feats[(full_feats.index >= window_start) & (full_feats.index < window_end)]
+        return frames, index_with_warmup
 
+    for fold_i, sp in enumerate(splits):
         best_combo, best_metric = None, float("-inf")
         for combo in combos:
             trial_cfg = base_cfg.model_copy(deep=True)
@@ -102,9 +130,11 @@ def true_walk_forward(
             trial_cfg.strategy.ema.structural = structural
             trial_cfg.strategy.ema.long = long_
             try:
-                regime_df = compute_market_regime(train_index)
-                frames = {t: build_stock_feature_frame(d, train_index["Close"], regime_df, trial_cfg) for t, d in train_universe.items()}
-                ev = run_event_study_all_models(frames, calendar, trial_cfg.costs)
+                train_frames, _ = _build_with_warmup(universe, index_df, sp["train_start"], sp["train_end"], trial_cfg)
+                train_frames = {t: f for t, f in train_frames.items() if len(f) > 30}
+                if not train_frames:
+                    continue
+                ev = run_event_study_all_models(train_frames, calendar, trial_cfg.costs)
                 if ev.empty:
                     continue
                 metric = ev[f"Fwd_Ret_{horizon}D"].median()
@@ -116,16 +146,13 @@ def true_walk_forward(
         if best_combo is None:
             continue
 
-        # Freeze best_combo, evaluate ONLY on the test window — never re-fit here.
-        test_universe = {t: d[(d.index >= sp["test_start"]) & (d.index < sp["test_end"])] for t, d in universe.items()}
-        test_universe = {t: d for t, d in test_universe.items() if len(d) > 30}
-        if not test_universe:
-            continue
-        test_index = index_df[(index_df.index >= sp["test_start"]) & (index_df.index < sp["test_end"])]
+        # Freeze best_combo, evaluate ONLY on the test window -- never re-fit here.
         frozen_cfg = base_cfg.model_copy(deep=True)
         frozen_cfg.strategy.ema.fast, frozen_cfg.strategy.ema.medium, frozen_cfg.strategy.ema.structural, frozen_cfg.strategy.ema.long = best_combo
-        regime_df = compute_market_regime(test_index)
-        test_frames = {t: build_stock_feature_frame(d, test_index["Close"], regime_df, frozen_cfg) for t, d in test_universe.items()}
+        test_frames, _ = _build_with_warmup(universe, index_df, sp["test_start"], sp["test_end"], frozen_cfg)
+        test_frames = {t: f for t, f in test_frames.items() if len(f) > 5}
+        if not test_frames:
+            continue
         ev_test = run_event_study_all_models(test_frames, calendar, frozen_cfg.costs)
         if ev_test.empty:
             continue
@@ -141,6 +168,7 @@ def true_walk_forward(
             "selected_training_structural": best_combo[2], "selected_training_long": best_combo[3],
             "training_window_selection_metric": best_metric,
             "selection_basis": f"max median Fwd_Ret_{horizon}D across training-window events",
+            "warmup_sessions_used": warmup_policy.required_daily_sessions,
             "mode": "MODE_2_TRUE_WALK_FORWARD",
         })
         rows.append(oos_stats)

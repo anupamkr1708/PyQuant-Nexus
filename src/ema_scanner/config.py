@@ -31,6 +31,8 @@ class SwingConfig(BaseModel):
 
 class VolatilityConfig(BaseModel):
     atr_period: int = 14
+    ema_slope_lookback_days: int = 10  # category: ENGINEERING_DECISION -- Phase-3 BLOCKER 25:
+                                          # promoted from a bare `k: int = 10` function default
 
 
 class ClusterConfig(BaseModel):
@@ -38,6 +40,10 @@ class ClusterConfig(BaseModel):
     compression_percentile: float = 0.20
     expansion_percentile: float = 0.80
     flat_band_percentile: float = 0.10
+    width_slope_lookback_days: int = 5     # category: ENGINEERING_DECISION -- Phase-3 BLOCKER 25:
+                                              # promoted from a bare `.rolling(5)` in features/cluster.py
+    percentile_min_periods: int = 30        # category: ENGINEERING_DECISION -- promoted from a bare
+                                              # `min_periods=30` used by both compression and expansion rolling windows
 
 
 class DefinitionsConfig(BaseModel):
@@ -61,6 +67,7 @@ class EntriesConfig(BaseModel):
 
 class RegimeConfig(BaseModel):
     benchmark: Literal["NIFTY50", "NIFTY200", "CUSTOM"] = "NIFTY50"
+    custom_benchmark_symbol: str | None = None  # required if benchmark == "CUSTOM"
     index_ema_fast: int = 20
     index_ema_medium: int = 50
     index_ema_structural: int = 89
@@ -77,6 +84,9 @@ class LiquidityConfig(BaseModel):
     min_average_daily_traded_value: float = 0.0
     min_average_volume: float = 0.0
     min_days_with_valid_volume: int = 0
+    volume_window_fast_days: int = 20   # category: ENGINEERING_DECISION -- Phase-3 BLOCKER 25:
+                                           # promoted from bare function defaults in features/liquidity.py
+    volume_window_slow_days: int = 50
 
 
 class StrategyConfig(BaseModel):
@@ -157,6 +167,15 @@ class BacktestConfig(BaseModel):
     exit_rule: Literal["STOP_ONLY_RESEARCH", "FIXED_HORIZON"] = "STOP_ONLY_RESEARCH"
     entry_model_col: str = "Any_Entry_Triggered"
     cost_scenario: Literal["zero_cost", "low_cost", "base_cost", "high_cost", "stress_cost"] = "base_cost"
+    risk_budget_basis: Literal["EQUITY", "CASH"] = "EQUITY"
+    # Phase-3 Section 15: STRATEGY_SPEC.md Section 8 documents risk sizing as
+    # `equity * risk_per_trade_pct` -- EQUITY (cash + mark-to-market value of
+    # open positions) is therefore the DEFAULT and matches the documented
+    # spec unchanged. CASH remains selectable for a more conservative
+    # (available-buying-power-only) sizing research variant, but selecting it
+    # is an explicit config choice, never a silent default swap. Available
+    # cash is ALWAYS enforced separately as an affordability constraint
+    # regardless of which basis sizes the position.
 
 
 class ResearchConfig(BaseModel):

@@ -33,11 +33,11 @@ def compute_cluster_metrics(df: pd.DataFrame, close_col: str = "Close", suffix: 
 
 def compute_cluster_compression(
     df: pd.DataFrame, suffix: str = "", lookback: int = 252,
-    compression_pctl: float = 0.20, expansion_pctl: float = 0.80,
+    compression_pctl: float = 0.20, expansion_pctl: float = 0.80, min_periods: int = 30,
 ) -> pd.DataFrame:
     out = df.copy()
     width = out[f"Cluster_Width_Pct{suffix}"]
-    pctl_rank = width.rolling(lookback, min_periods=30).apply(lambda w: (w[-1] <= w).mean(), raw=True)
+    pctl_rank = width.rolling(lookback, min_periods=min_periods).apply(lambda w: (w[-1] <= w).mean(), raw=True)
     out[f"Cluster_Width_Percentile{suffix}"] = pctl_rank
     out[f"Cluster_Compressed_Flag{suffix}"] = pctl_rank <= compression_pctl
     out[f"Cluster_ExpandedRegime_Flag{suffix}"] = pctl_rank >= expansion_pctl
@@ -46,20 +46,21 @@ def compute_cluster_compression(
 
 def compute_cluster_expansion(
     df: pd.DataFrame, suffix: str = "", lookback: int = 252, flat_band_pctl: float = 0.10,
+    slope_lookback_days: int = 5, min_periods: int = 30,
 ) -> pd.DataFrame:
     out = df.copy()
     width = out[f"Cluster_Width_Pct{suffix}"]
     out[f"Cluster_Width_Change_1D{suffix}"] = width.diff(1)
-    out[f"Cluster_Width_Change_5D{suffix}"] = width.diff(5)
+    out[f"Cluster_Width_Change_5D{suffix}"] = width.diff(slope_lookback_days)
 
     def _slope(y):
         if np.isnan(y).any():
             return np.nan
         return np.polyfit(np.arange(len(y)), y, 1)[0]
 
-    out[f"Cluster_Width_Slope{suffix}"] = width.rolling(5).apply(_slope, raw=True)
+    out[f"Cluster_Width_Slope{suffix}"] = width.rolling(slope_lookback_days).apply(_slope, raw=True)
     change5 = out[f"Cluster_Width_Change_5D{suffix}"]
-    roll = change5.rolling(lookback, min_periods=30)
+    roll = change5.rolling(lookback, min_periods=min_periods)
     lo, hi = roll.quantile(0.5 - flat_band_pctl / 2), roll.quantile(0.5 + flat_band_pctl / 2)
     state = pd.Series("FLAT", index=out.index)
     state[change5 > hi] = "EXPANDING"

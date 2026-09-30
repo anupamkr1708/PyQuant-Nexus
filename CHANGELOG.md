@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.3.0 -- Phase 3: second adversarial correctness audit response
+
+Full itemized response in `docs/PHASE3_AUDIT.md`. Headline fixes:
+
+- **same_close signals never executed** (severe bug) -- fixed by giving
+  same_close an immediate-execution path instead of routing through the
+  pending-order queue.
+- **Point-in-time corporate-action leakage** -- split back-adjustment now
+  masks any split dated after the decision date; the cache now stores RAW
+  data (not pre-adjusted) so this stays correct as the cache grows.
+- **Event study was signal-date-relative, not execution-date-relative** --
+  every horizon and MFE/MAE window now anchors on the actual execution date
+  with session-stage-aware offsets.
+- Position sizing now uses EQUITY (matching STRATEGY_SPEC.md), not cash.
+- Same-day stop exits and entry-day MFE/MAE now correctly handled for
+  next_open fills.
+- Non-finite (NaN/inf) OHLCV and index-contract violations are now hard
+  quality failures.
+- Internal cache gaps (RANGE_COVERED vs RANGE_COMPLETE) are now detected.
+- Cache versioning, composite-provider provenance, and yfinance `repair=`
+  choice are all now recorded/auditable.
+- Benchmark configuration (NIFTY50/NIFTY200/CUSTOM) now actually resolves to
+  a real ticker (or fails clearly rather than guessing one) and configured
+  regime EMA periods actually reach `compute_market_regime`.
+- Special-session (Muhurat) calendar reference data model added, distinguishing
+  known trading DATE from known session TIMING -- no time is ever inferred.
+- Walk-forward Mode 2 now builds features with proper per-fold warmup.
+- Portfolio statistics: turnover renamed/fixed (trade-count vs. true notional
+  turnover), CAGR/Sharpe/Sortino formulas made explicit with deterministic
+  fixture tests, date-clustered and two-way bootstrap CIs added.
+- Several Phase-2 tests strengthened after a vacuous-assertion audit (one
+  genuinely vacuous `... or True` assertion found and fixed).
+- Four previously-buried magic numbers promoted to config.
+- Research commands no longer silently skip excluded symbols -- an explicit
+  data-completeness audit report is now produced.
+
+See docs/PHASE3_AUDIT.md for the full section-by-section classification.
+
 ## 0.2.0 -- Phase 2: adversarial correctness review response
 
 Full itemized response in `docs/PHASE2_AUDIT.md`. No architecture rewrite --

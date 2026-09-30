@@ -44,7 +44,7 @@ from ema_scanner.data.cache import DataCache
 from ema_scanner.data.factory import build_data_provider
 from ema_scanner.data.quality import QUALITY_FAIL, validate_ohlc
 from ema_scanner.data.repository import DataRepository
-from ema_scanner.features.regime import compute_market_regime
+from ema_scanner.features.regime import compute_market_regime, resolve_benchmark
 from ema_scanner.features.relative_strength import compute_universe_rs_percentile
 from ema_scanner.logging_config import configure_logging
 from ema_scanner.models import SymbolFailure
@@ -123,15 +123,17 @@ def scan(manual_date: str | None, config_path: str | None, output_dir: str, univ
 
     provider = build_data_provider(cfg.data)  # Phase-2 Section 3: config-driven, not hard-coded
     cache = DataCache(root=str(Path("data") / "cache"))
-    repo = DataRepository(provider, cache, price_mode=cfg.data.price_mode, overlap_sessions=cfg.data.refresh_overlap_sessions)
+    repo = DataRepository(provider, cache, price_mode=cfg.data.price_mode, overlap_sessions=cfg.data.refresh_overlap_sessions, calendar=calendar)
 
     warmup = calculate_required_warmup(cfg)  # Phase-2 Section 9
     requested_start = analysis_date - pd.DateOffset(years=cfg.data.min_history_years)
     fetch_start = warmup.warmup_start_via_calendar(requested_start, calendar)
     fetch_start_str, fetch_end_str = str(fetch_start.date()), str(analysis_date.date())
 
+    benchmark = resolve_benchmark(cfg.strategy.regime)
+    click.echo(f"Benchmark: {benchmark.label} ({benchmark.symbol})")
     try:
-        index_df, _index_diag = repo.get_daily_ohlcv("^NSEI", fetch_start_str, fetch_end_str)
+        index_df, _index_diag = repo.get_daily_ohlcv(benchmark.symbol, fetch_start_str, fetch_end_str)
     except DataUnavailableError as e:
         click.secho(f"ABORT_BENCHMARK: {e}", fg="red")
         sys.exit(1)
@@ -141,7 +143,10 @@ def scan(manual_date: str | None, config_path: str | None, output_dir: str, univ
             f"date {analysis_date.date()} (brief Phase-2 Section 6/7).", fg="red",
         )
         sys.exit(1)
-    regime_df = compute_market_regime(index_df)
+    regime_df = compute_market_regime(
+        index_df, ema_fast=cfg.strategy.regime.index_ema_fast, ema_medium=cfg.strategy.regime.index_ema_medium,
+        ema_structural=cfg.strategy.regime.index_ema_structural, ema_long=cfg.strategy.regime.index_ema_long,
+    )
 
     rows, failures, quality_summary = [], [], {"PASS": 0, "WARN": 0, "FAIL": 0}
     feature_frames_for_rs: dict[str, pd.DataFrame] = {}
@@ -162,7 +167,7 @@ def scan(manual_date: str | None, config_path: str | None, output_dir: str, univ
             if not report.eligible_for_signal or report.analysis_date_bar_present is False:
                 failures.append(SymbolFailure(c.symbol, "analysis_date_gate", "DATA_NOT_READY: " + "; ".join(report.issues)))
                 continue
-            feats = build_stock_feature_frame(df, index_df["Close"], regime_df, cfg)
+            feats = build_stock_feature_frame(df, index_df["Close"], regime_df, cfg, calendar=calendar)
             feats = apply_optional_filters(feats, cfg.strategy.liquidity)
             if feats.empty or analysis_date not in feats.index:
                 failures.append(SymbolFailure(c.symbol, "pipeline", "no feature row at resolved analysis date"))
@@ -294,30 +299,57 @@ def cross_check_data(symbols: str, start: str, end: str, config_path: str | None
 def _load_universe_frames(symbols: list[str], start: str, end: str, cfg: Config):
     """Shared helper for backtest/event-study/walk-forward/sensitivity
     commands. Phase-2: goes through the provider factory + cache-first
-    repository + warm-up engine, same as `scan`."""
+    repository + warm-up engine, same as `scan`.
+
+    **Phase-3 BLOCKER 27 fix:** every excluded symbol is now recorded with an
+    explicit reason via `research.data_audit`, instead of a bare
+    `except: continue` that silently dropped it. Callers get the audit report
+    back so economic results can state exactly how many requested
+    constituents were actually evaluated."""
+    from ema_scanner.data.quality import validate_ohlc
+    from ema_scanner.research.data_audit import build_research_data_audit
+
     calendar = NSECalendar()
     provider = build_data_provider(cfg.data)
     cache = DataCache(root=str(Path("data") / "cache"))
-    repo = DataRepository(provider, cache, price_mode=cfg.data.price_mode, overlap_sessions=cfg.data.refresh_overlap_sessions)
+    repo = DataRepository(provider, cache, price_mode=cfg.data.price_mode, overlap_sessions=cfg.data.refresh_overlap_sessions, calendar=calendar)
 
     warmup = calculate_required_warmup(cfg)
     requested_start = pd.Timestamp(start)
     fetch_start = warmup.warmup_start_via_calendar(requested_start, calendar)
 
-    index_df, _ = repo.get_daily_ohlcv("^NSEI", str(fetch_start.date()), end)
-    regime_df = compute_market_regime(index_df)
-    frames = {}
+    benchmark = resolve_benchmark(cfg.strategy.regime)
+    index_df, _ = repo.get_daily_ohlcv(benchmark.symbol, str(fetch_start.date()), end)
+    regime_df = compute_market_regime(
+        index_df, ema_fast=cfg.strategy.regime.index_ema_fast, ema_medium=cfg.strategy.regime.index_ema_medium,
+        ema_structural=cfg.strategy.regime.index_ema_structural, ema_long=cfg.strategy.regime.index_ema_long,
+    )
+    frames, exclusions, resolved_sources, missing_sessions = {}, {}, {}, {}
     for sym in symbols:
         try:
-            df, _diag = repo.get_daily_ohlcv(sym, str(fetch_start.date()), end)
-            full_feats = build_stock_feature_frame(df, index_df["Close"], regime_df, cfg)
+            df, diag = repo.get_daily_ohlcv(sym, str(fetch_start.date()), end)
+            resolved_sources[sym] = diag.resolved_source or provider.name
+            report = validate_ohlc(df, calendar, as_of_date=pd.Timestamp(end), max_stale_sessions=cfg.data.max_stale_sessions)
+            missing_sessions[sym] = report.missing_expected_sessions
+            if report.status == "FAIL":
+                exclusions[sym] = f"quality_gate: {'; '.join(report.issues) or 'FAIL'}"
+                continue
+            full_feats = build_stock_feature_frame(df, index_df["Close"], regime_df, cfg, calendar=calendar)
             # Trim to the REQUESTED window only after warm-up has stabilized
             # the indicators (brief Phase-2 Section 9) -- callers evaluate
             # only [requested_start, end], never the warm-up-only region.
-            frames[sym] = full_feats.loc[full_feats.index >= requested_start]
-        except DataUnavailableError:
-            continue
-    return frames, index_df, regime_df
+            trimmed = full_feats.loc[full_feats.index >= requested_start]
+            if trimmed.empty:
+                exclusions[sym] = "no rows remain after trimming to the requested window"
+                continue
+            frames[sym] = trimmed
+        except DataUnavailableError as e:
+            exclusions[sym] = f"data_fetch: {e}"
+        except Exception as e:  # noqa: BLE001 - one symbol's failure must not abort the whole research universe load
+            exclusions[sym] = f"pipeline: {e}"
+
+    audit = build_research_data_audit(symbols, frames, exclusions, resolved_sources, missing_sessions)
+    return frames, index_df, regime_df, audit
 
 
 @main.command("event-study")
@@ -338,9 +370,11 @@ def event_study_cmd(start: str, end: str, symbols: str | None, config_path: str 
     calendar = NSECalendar()
     sym_list = symbols.split(",") if symbols else [c.symbol for c in fetch_current_nifty200(cfg.universe.source_csv_url)[0]]
     click.echo(f"UNIVERSE_MODE={label_universe_mode(None)} (see docs/NOTEBOOK_AUDIT.md Section 2)")
-    frames, _, _ = _load_universe_frames(sym_list, start, end, cfg)
+    frames, _, _, audit = _load_universe_frames(sym_list, start, end, cfg)
+    click.echo(audit.summary_line())
     ev = run_event_study_all_models(frames, calendar, cfg.costs)
     out = Path(output_dir)
+    write_csv(audit.to_dataframe(), out / "research_data_audit.csv")
     write_csv(ev, out / "event_study_raw.csv")
     write_csv(comparison_table(ev), out / "strategy_summary.csv")
     write_csv(regime_breakdown(ev), out / "strategy_regime_breakdown.csv")
@@ -364,9 +398,11 @@ def backtest_cmd(start: str, end: str, symbols: str | None, exit_rule: str | Non
     calendar = NSECalendar()
     sym_list = symbols.split(",") if symbols else [c.symbol for c in fetch_current_nifty200(cfg.universe.source_csv_url)[0]]
     click.echo(f"UNIVERSE_MODE={label_universe_mode(None)} (see docs/NOTEBOOK_AUDIT.md Section 2)")
-    frames, _, _ = _load_universe_frames(sym_list, start, end, cfg)
+    frames, _, _, audit = _load_universe_frames(sym_list, start, end, cfg)
+    click.echo(audit.summary_line())
     result = run_portfolio_backtest(frames, calendar, cfg, entry_model_col=entry_model, exit_rule=exit_rule)  # type: ignore[arg-type]
     out = Path(output_dir)
+    write_csv(audit.to_dataframe(), out / "research_data_audit.csv")
     write_csv(result.trade_log_df(), out / "trade_log.csv")
     write_csv(result.equity_curve.reset_index(), out / "portfolio_equity.csv")
     write_csv(result.skipped_signals_df(), out / "skipped_signals.csv")
@@ -389,13 +425,13 @@ def walk_forward_cmd(start: str, end: str, symbols: str | None, mode: str, confi
     calendar = NSECalendar()
     sym_list = symbols.split(",") if symbols else [c.symbol for c in fetch_current_nifty200(cfg.universe.source_csv_url)[0]]
     if mode == "1":
-        frames, _, _ = _load_universe_frames(sym_list, start, end, cfg)
+        frames, _, _, audit = _load_universe_frames(sym_list, start, end, cfg)
+        click.echo(audit.summary_line())
         result = walk_forward_fixed_spec(frames, calendar, cfg.costs, train_years=cfg.research.walk_forward.train_years, test_years=cfg.research.walk_forward.test_years)
     else:
-        _load_universe_frames(sym_list[:1], start, end, cfg)  # warms the shared data cache before the raw-frame fetch below
         provider = build_data_provider(cfg.data)
         cache = DataCache(root=str(Path("data") / "cache"))
-        repo = DataRepository(provider, cache, price_mode=cfg.data.price_mode, overlap_sessions=cfg.data.refresh_overlap_sessions)
+        repo = DataRepository(provider, cache, price_mode=cfg.data.price_mode, overlap_sessions=cfg.data.refresh_overlap_sessions, calendar=calendar)
         warmup = calculate_required_warmup(cfg)
         fetch_start = warmup.warmup_start_via_calendar(pd.Timestamp(start), calendar)
         raw_frames = {}
@@ -405,7 +441,8 @@ def walk_forward_cmd(start: str, end: str, symbols: str | None, mode: str, confi
                 raw_frames[sym] = df
             except DataUnavailableError:
                 continue
-        index_full, _ = repo.get_daily_ohlcv("^NSEI", str(fetch_start.date()), end)
+        benchmark = resolve_benchmark(cfg.strategy.regime)
+        index_full, _ = repo.get_daily_ohlcv(benchmark.symbol, str(fetch_start.date()), end)
         param_grid = {"fast": (10,), "medium": (20,), "structural": (89,), "long": (180, 200, 220)}
         result = true_walk_forward(raw_frames, index_full, cfg, calendar, param_grid, train_years=cfg.research.walk_forward.train_years, test_years=cfg.research.walk_forward.test_years)
         if not result.empty:
@@ -428,7 +465,7 @@ def sensitivity_cmd(start: str, end: str, symbols: str | None, config_path: str 
     sym_list = symbols.split(",") if symbols else [c.symbol for c in fetch_current_nifty200(cfg.universe.source_csv_url)[0]]
     provider = build_data_provider(cfg.data)
     cache = DataCache(root=str(Path("data") / "cache"))
-    repo = DataRepository(provider, cache, price_mode=cfg.data.price_mode, overlap_sessions=cfg.data.refresh_overlap_sessions)
+    repo = DataRepository(provider, cache, price_mode=cfg.data.price_mode, overlap_sessions=cfg.data.refresh_overlap_sessions, calendar=calendar)
     warmup = calculate_required_warmup(cfg)
     fetch_start = warmup.warmup_start_via_calendar(pd.Timestamp(start), calendar)
     raw_frames = {}
@@ -438,7 +475,8 @@ def sensitivity_cmd(start: str, end: str, symbols: str | None, config_path: str 
             raw_frames[sym] = df
         except DataUnavailableError:
             continue
-    index_df, _ = repo.get_daily_ohlcv("^NSEI", str(fetch_start.date()), end)
+    benchmark = resolve_benchmark(cfg.strategy.regime)
+    index_df, _ = repo.get_daily_ohlcv(benchmark.symbol, str(fetch_start.date()), end)
     grid = ema_period_sensitivity(raw_frames, index_df, cfg, calendar)
     write_csv(grid, Path(output_dir) / "strategy_parameter_sensitivity.csv")
     summary = plateau_summary(grid, "avg_return_pct", ["fast", "medium", "structural", "long"])

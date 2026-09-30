@@ -62,8 +62,21 @@ def build_scanner_row(
     risk_geometry_valid = validate_risk_geometry(signal_close, stop_ref, "LONG") if (signal_close is not None and stop_ref is not None) else None
 
     exe = resolve_execution_price(feats, analysis_date, calendar, execution_model=execution_model)
+    # Phase-3 BLOCKER 14 fix: Next_Session_Date is a pure CALENDAR fact --
+    # resolvable without needing tomorrow's price to exist at all (this is
+    # exactly what a live EOD scan needs: it knows what the next session's
+    # DATE will be, even though that session hasn't happened yet and so has
+    # no price data). Execution_Reference genuinely requires a future bar to
+    # exist (true for historical backtests where "the future" is already in
+    # the data; false for a live scan of the latest completed session) and
+    # is kept separately gated on that. Setting BOTH to None whenever the
+    # price isn't available (the v1/Phase-2 behavior) incorrectly implied
+    # the next session's DATE was also unknown.
+    if execution_model == "same_close":
+        next_session_date = analysis_date
+    else:
+        next_session_date = calendar.next_session(analysis_date)
     execution_reference = exe.execution_price if exe.status == "OK" else None
-    next_session_date = exe.execution_date if exe.status == "OK" else None
 
     return {
         "Symbol": symbol, "Company": company, "Analysis_Date": analysis_date,

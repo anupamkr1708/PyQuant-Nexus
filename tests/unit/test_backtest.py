@@ -47,6 +47,7 @@ def test_every_trade_has_an_exit_reason():
     frames, cfg = _build_universe()
     cal = NSECalendar()
     result = run_portfolio_backtest(frames, cal, cfg, initial_capital=500_000)
+    assert len(result.trades) > 0, "fixture must guarantee at least one trade, or this test passes vacuously"
     for t in result.trades:
         assert t.exit_reason is not None
         assert t.exit_date is not None

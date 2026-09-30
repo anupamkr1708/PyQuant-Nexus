@@ -128,3 +128,41 @@ def test_thursday_never_sees_an_incomplete_current_week_even_with_holiday_shorte
     row = latest_known_weekly_row(w, wednesday)
     thursday_of_that_week = holiday_friday - pd.Timedelta(days=1)
     assert row.name < thursday_of_that_week
+
+
+def test_scheduled_sunday_session_after_friday_keeps_that_weeks_candle_open():
+    """Phase-3 BLOCKER 8: if the exchange calendar schedules a session AFTER
+    the last observed bar in a week (e.g. a Sunday Muhurat session following
+    a Friday), Friday's EOD must NOT treat that week's candle as final merely
+    because no Sunday row exists yet in the data -- the calendar's expected
+    week boundary governs, not the observed last bar."""
+    from ema_scanner.calendar.nse import NSECalendar
+
+    cal = NSECalendar()
+    # A short daily series ending on the Friday immediately before the
+    # scheduled 2026-11-08 Sunday Muhurat session.
+    dates = pd.bdate_range("2026-10-01", "2026-11-06")  # ends Friday 2026-11-06
+    daily = make_synthetic_ohlcv(len(dates), seed=90, start="2026-10-01")
+    daily = daily.iloc[: len(dates)]
+    daily.index = dates[: len(daily)]
+
+    expected_week_ends = cal.expected_week_ends(daily.index.min(), daily.index.max())
+    weekly = build_true_weekly_ohlc(daily, expected_week_ends=expected_week_ends)
+
+    last_friday = dates[-1]
+    week_row = weekly.loc[weekly.index == last_friday]
+    assert not week_row.empty
+    # The calendar knows a session is scheduled for Sunday 2026-11-08, so the
+    # EXPECTED close of that week must be AFTER the observed Friday bar.
+    assert week_row["ExpectedWeekEnd"].iloc[0] > last_friday
+    assert week_row["ExpectedWeekEnd"].iloc[0] == pd.Timestamp("2026-11-08")
+
+    w = compute_all_emas(weekly, suffix="_W")
+    # On the Friday itself, this week's candle must NOT be treated as
+    # available yet (a scheduled session remains) -- the LAST available
+    # weekly row must be from an EARLIER, already-fully-closed week.
+    row_on_friday = latest_known_weekly_row(w, last_friday)
+    assert row_on_friday.name < last_friday, (
+        "Friday's own week must not be usable while a scheduled Sunday session "
+        "for that same week has not yet occurred"
+    )

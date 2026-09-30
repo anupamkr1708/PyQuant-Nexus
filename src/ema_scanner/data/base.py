@@ -25,6 +25,7 @@ class ProviderMetadata:
     schema_version: str
     raw_file_hash: str | None = None
     parser_version: str = "1"
+    vendor_repair_enabled: bool | None = None  # Phase-3 BLOCKER 24: audit trail for yfinance's `repair=` choice
 
 
 class DataProvider(ABC):

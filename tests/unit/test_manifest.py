@@ -32,7 +32,13 @@ def test_manifest_does_not_conflate_symbol_count_with_row_count():
     )
     assert manifest.rows_downloaded != manifest.symbols_requested
     assert manifest.missing_sessions == 3  # never hard-coded to 0
-    assert manifest.symbols_failed != manifest.stale_symbols.__len__() or True  # distinct concepts, not required equal
+    # symbols_failed and stale_symbols are DISTINCT concepts (a symbol can
+    # fail for reasons unrelated to staleness, e.g. quality_gate/data_fetch) --
+    # this fixture deliberately sets them to different counts to prove the
+    # manifest doesn't silently conflate the two.
+    assert manifest.symbols_failed == 20
+    assert len(manifest.stale_symbols) == 1
+    assert manifest.symbols_failed != len(manifest.stale_symbols)
     assert manifest.universe_count == 200
 
 

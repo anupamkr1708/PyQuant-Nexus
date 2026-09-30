@@ -1,8 +1,33 @@
-"""Historical event study (notebook Cell 38; audit row 30).
+"""Historical event study (notebook Cell 38; audit row 30; Phase-3 BLOCKERS 4, 5).
 
-Answers "what happened after these signals?" — explicitly NOT a tradable
+Answers "what happened after these signals?" -- explicitly NOT a tradable
 portfolio P&L (brief Section 46). For that, see research/backtest.py, which is a
 SEPARATE engine. Do not mix the two outputs into one table.
+
+**Bugs fixed (Phase-3 BLOCKERS 4, 5):** v1 resolved the correct EXECUTION
+price via `resolve_execution_price`, but then measured every forward horizon
+and MFE/MAE relative to the SIGNAL date's row position, not the EXECUTION
+date's. For `next_open`/`next_close`, execution can be one or more sessions
+after the signal -- so "Fwd_Ret_1D" was silently measuring 1 session after
+the SIGNAL (which could be zero, or even negative, sessions after the actual
+entry), not 1 session after the entry actually occurred.
+
+Horizons and MFE/MAE are now anchored on `Execution_Date`'s row position,
+with explicit session-stage semantics (module-level `_STAGE_HORIZON_OFFSET`)
+matching research/backtest.py's `_EXECUTION_MODEL_TO_STAGE`:
+
+    OPEN stage (next_open):   entry occurs AT that session's Open, so that
+        SAME session's Close is a valid "H=1" observation (`fut_loc = loc + h - 1`),
+        and that session's own High/Low are valid MFE/MAE observations
+        (they occur strictly after the Open entry).
+    CLOSE stage (same_close, next_close): entry occurs AT that session's
+        Close, so there is no more price path left that session -- "H=1" is
+        the FOLLOWING session's close (`fut_loc = loc + h`), and that
+        session's own High/Low must be EXCLUDED from MFE/MAE (they occurred
+        BEFORE the close-price entry).
+
+Every event record now carries `Signal_Date`, `Execution_Date`,
+`Execution_Price`, and `Execution_Model` explicitly (brief Phase-3 Section 4).
 """
 from __future__ import annotations
 
@@ -17,32 +42,52 @@ from ema_scanner.strategy.entries import ENTRY_MODEL_COLS
 
 FORWARD_HORIZONS = (1, 3, 5, 10, 20, 40)
 
+ExecutionModel = Literal["same_close", "next_open", "next_close"]
+EntryStage = Literal["OPEN", "CLOSE"]
+
+_EXECUTION_MODEL_TO_STAGE: dict[str, EntryStage] = {
+    "same_close": "CLOSE", "next_open": "OPEN", "next_close": "CLOSE",
+}
+
 
 def event_study_forward_returns(
-    price_df: pd.DataFrame, event_dates, entry_prices: pd.Series, horizons: tuple[int, ...] = FORWARD_HORIZONS
+    price_df: pd.DataFrame, events: pd.DataFrame, entry_stage: EntryStage, horizons: tuple[int, ...] = FORWARD_HORIZONS,
 ) -> pd.DataFrame:
+    """`events` must have columns `Signal_Date`, `Execution_Date`,
+    `Execution_Price` (see `run_event_study_all_models` for how these are
+    assembled). All horizon/MFE/MAE measurement is anchored on
+    `Execution_Date`'s row position in `price_df`, per the module docstring's
+    session-stage semantics -- NEVER on `Signal_Date`'s position."""
     idx = price_df.index
     rows = []
     max_h = max(horizons)
-    for event_date in event_dates:
-        if event_date not in entry_prices.index or pd.isna(entry_prices.loc[event_date]) or event_date not in idx:
+    open_stage = entry_stage == "OPEN"
+
+    for _, ev in events.iterrows():
+        signal_date, execution_date, entry_price = ev["Signal_Date"], ev["Execution_Date"], ev["Execution_Price"]
+        if execution_date not in idx or pd.isna(entry_price):
             continue
-        entry_price = entry_prices.loc[event_date]
-        loc = idx.get_loc(event_date)
-        row = {"Event_Date": event_date, "Entry_Price": entry_price}
-        path = price_df.iloc[loc : min(loc + max_h, len(idx) - 1) + 1]
-        if len(path) > 1:
-            row["MFE_Pct"] = (path["High"].iloc[1:].max() - entry_price) / entry_price * 100.0
-            row["MAE_Pct"] = (path["Low"].iloc[1:].min() - entry_price) / entry_price * 100.0
-            row["Time_to_MFE"] = int(path["High"].iloc[1:].to_numpy().argmax()) + 1
-            row["Time_to_MAE"] = int(path["Low"].iloc[1:].to_numpy().argmin()) + 1
+        loc = idx.get_loc(execution_date)
+        row = {"Signal_Date": signal_date, "Execution_Date": execution_date, "Entry_Price": entry_price}
+
+        mfe_start_loc = loc if open_stage else loc + 1
+        mfe_end_loc = min((loc + max_h - 1) if open_stage else (loc + max_h), len(idx) - 1)
+        if mfe_start_loc <= mfe_end_loc:
+            path = price_df.iloc[mfe_start_loc : mfe_end_loc + 1]
+            row["MFE_Pct"] = (path["High"].max() - entry_price) / entry_price * 100.0
+            row["MAE_Pct"] = (path["Low"].min() - entry_price) / entry_price * 100.0
+            row["Time_to_MFE"] = int(path["High"].to_numpy().argmax()) + (mfe_start_loc - loc)
+            row["Time_to_MAE"] = int(path["Low"].to_numpy().argmin()) + (mfe_start_loc - loc)
         else:
             row["MFE_Pct"] = row["MAE_Pct"] = row["Time_to_MFE"] = row["Time_to_MAE"] = float("nan")
+
         for h in horizons:
-            fut_loc = loc + h
+            # OPEN stage: H=1 is the SAME (execution) session's close.
+            # CLOSE stage: H=1 is the FOLLOWING session's close.
+            fut_loc = loc + (h - 1) if open_stage else loc + h
             row[f"Fwd_Ret_{h}D"] = (
                 (price_df["Close"].iloc[fut_loc] - entry_price) / entry_price * 100.0
-                if fut_loc < len(idx) else float("nan")
+                if 0 <= fut_loc < len(idx) else float("nan")
             )
         rows.append(row)
     return pd.DataFrame(rows)
@@ -62,29 +107,32 @@ def apply_transaction_costs(event_study_df: pd.DataFrame, costs: CostsConfig, ho
 
 def run_event_study_all_models(
     feature_frames: dict[str, pd.DataFrame], calendar: NSECalendar, costs: CostsConfig,
-    execution_model: Literal["same_close", "next_open", "next_close"] = "next_open",
+    execution_model: ExecutionModel = "next_open",
     horizons: tuple[int, ...] = FORWARD_HORIZONS, cost_scenario: str = "base_cost",
 ) -> pd.DataFrame:
+    entry_stage = _EXECUTION_MODEL_TO_STAGE[execution_model]
     all_rows = []
     for model_col, model_label in ENTRY_MODEL_COLS.items():
         for ticker, feats in feature_frames.items():
             if model_col not in feats.columns:
                 continue
-            event_dates = feats.index[feats[model_col].fillna(False)]
-            if len(event_dates) == 0:
+            signal_dates = feats.index[feats[model_col].fillna(False)]
+            if len(signal_dates) == 0:
                 continue
-            entry_prices = {}
-            for ed in event_dates:
-                exe = resolve_execution_price(feats, ed, calendar, execution_model=execution_model)
-                if exe.execution_price is not None:
-                    entry_prices[ed] = exe.execution_price
-            if not entry_prices:
+            events = []
+            for sd in signal_dates:
+                exe = resolve_execution_price(feats, sd, calendar, execution_model=execution_model)
+                if exe.status == "OK" and exe.execution_price is not None:
+                    events.append({"Signal_Date": sd, "Execution_Date": exe.execution_date, "Execution_Price": exe.execution_price})
+            if not events:
                 continue
-            es = event_study_forward_returns(feats, pd.Series(entry_prices).index, pd.Series(entry_prices), horizons=horizons)
+            events_df = pd.DataFrame(events)
+            es = event_study_forward_returns(feats, events_df, entry_stage=entry_stage, horizons=horizons)
             if es.empty:
                 continue
             es["Ticker"], es["Entry_Model"], es["Entry_Model_Label"] = ticker, model_col, model_label
-            es["Market_Regime"] = feats.loc[es["Event_Date"], "Market_Regime"].to_numpy()
+            es["Execution_Model"] = execution_model
+            es["Market_Regime"] = feats.loc[es["Execution_Date"], "Market_Regime"].to_numpy()
             all_rows.append(es)
     if not all_rows:
         return pd.DataFrame()
@@ -112,10 +160,7 @@ def comparison_table(event_df: pd.DataFrame, horizon: int = 20) -> pd.DataFrame:
             "Max_Favorable_Excursion_Pct": sub["MFE_Pct"].mean(), "Max_Adverse_Excursion_Pct": sub["MAE_Pct"].mean(),
             # NOTE: no "Max_Drawdown_Pct" here by design (Phase-2 Section 15) --
             # event-study observations are not a chronological, mutually-
-            # exclusive path, so a drawdown computed from them would not
-            # represent an actual tradable portfolio path. See
-            # research/statistics.py::portfolio_stats_from_equity_curve for the
-            # real (backtest-derived) drawdown metric.
+            # exclusive path; see research/statistics.py::portfolio_stats_from_equity_curve.
         })
     return pd.DataFrame(rows)
 

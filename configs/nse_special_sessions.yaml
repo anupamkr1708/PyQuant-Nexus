@@ -1,0 +1,25 @@
+# NSE special-session reference data (Phase-3 BLOCKER 8).
+#
+# This file is the explicit, auditable data path for sessions a generic
+# calendar library may not model (Muhurat Trading etc.). Nothing here is
+# guessed: an entry's exact times stay null until the exchange's own
+# notification has been checked, and `official_document_verified` says
+# honestly whether the primary NSE document was itself inspected.
+calendar_version: nse_special_sessions_v1
+entries:
+  - date: "2026-11-08"
+    is_trading_day: true
+    session_type: MUHURAT
+    session_open: null          # timings "to be notified separately" by NSE -- NOT inferred here
+    session_close: null
+    timing_verified: false
+    source: >-
+      Secondary sources citing NSE's 2026 holiday list (Tickertape, ClearTax, Sahi,
+      Tata Mutual Fund, Kotak Neo, Share.market) - all state Sunday 8 Nov 2026 is a
+      Muhurat Trading day with timings to be notified separately.
+    source_url: "https://www.tatamutualfund.com/blogs/nse-holidays-2026"
+    verified_at: "2026-09-28"
+    official_document_verified: false   # the primary NSE circular was NOT inspected in this build
+    note: >-
+      Known trading DATE, unknown session TIMING. Replace null times (and set
+      timing_verified: true) only after checking NSE's own timing circular.

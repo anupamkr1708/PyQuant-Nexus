@@ -66,11 +66,14 @@ def ema_period_sensitivity(
         trial_cfg = base_cfg.model_copy(deep=True)
         trial_cfg.strategy.ema.fast, trial_cfg.strategy.ema.medium = fast, medium
         trial_cfg.strategy.ema.structural, trial_cfg.strategy.ema.long = structural, long_
-        regime_df = compute_market_regime(index_df)
+        regime_df = compute_market_regime(
+            index_df, ema_fast=trial_cfg.strategy.regime.index_ema_fast, ema_medium=trial_cfg.strategy.regime.index_ema_medium,
+            ema_structural=trial_cfg.strategy.regime.index_ema_structural, ema_long=trial_cfg.strategy.regime.index_ema_long,
+        )
         frames = {}
         for ticker, daily_df in universe.items():
             try:
-                frames[ticker] = build_stock_feature_frame(daily_df, index_df["Close"], regime_df, trial_cfg)
+                frames[ticker] = build_stock_feature_frame(daily_df, index_df["Close"], regime_df, trial_cfg, calendar=calendar)
             except Exception:  # noqa: BLE001 - one bad ticker must not crash the whole sensitivity grid
                 continue
         if not frames:
